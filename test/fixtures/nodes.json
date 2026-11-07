@@ -1,0 +1,5 @@
+[
+  {"id":1,"machine_key":"mkey:abc123","node_key":"nodekey:def456","disco_key":"discokey:ghi789","ip_addresses":["100.64.0.1","fd7a:115c:a1e0::1"],"name":"laptop-hp","user":{"id":1,"name":"alice"},"last_seen":{"seconds":1767225600},"expiry":{"seconds":1800000000},"register_method":1,"created_at":{"seconds":1767000000},"given_name":"laptop","online":true,"approved_routes":["192.168.1.0/24"],"available_routes":["192.168.1.0/24","10.10.0.0/16"],"subnet_routes":["192.168.1.0/24"],"tags":[]},
+  {"id":2,"machine_key":"mkey:aaa111","node_key":"nodekey:bbb222","disco_key":"discokey:ccc333","ip_addresses":["100.64.0.2"],"name":"pixel-8","user":{"id":1,"name":"alice"},"last_seen":{"seconds":1767200000},"given_name":"phone","online":false,"tags":["tag:mobile"]},
+  {"id":3,"machine_key":"mkey:ddd444","node_key":"nodekey:eee555","disco_key":"discokey:fff666","ip_addresses":["100.64.0.3"],"name":"laptop-linux","user":{"id":2,"name":"bob"},"last_seen":{"seconds":1767300000},"expiry":{"seconds":1700000000},"given_name":"laptop2","online":true,"tags":[]}
+]

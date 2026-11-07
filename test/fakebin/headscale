@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+# Fake headscale: only exists to exercise hs argument construction and JSON parsing.
+set -euo pipefail
+here=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+FIXTURES=${FIXTURES:-$here/../fixtures}
+printf '%s\n' "$*" >>"${HS_LOG:-/dev/null}"
+
+key="$1 ${2:-}"
+key=${key% }
+
+case "$key" in
+"nodes list") cat "$FIXTURES/nodes.json" ;;
+"preauthkeys list") cat "$FIXTURES/keys.json" ;;
+"users list") cat "$FIXTURES/users.json" ;;
+"nodes delete") echo "Node deleted" ;;
+"nodes rename") echo "Node renamed" ;;
+"nodes tag") echo "Node updated" ;;
+"nodes expire") echo "Node expired" ;;
+"nodes approve-routes") echo "Node updated" ;;
+"preauthkeys create") echo "preauthkey-abc123" ;;
+"preauthkeys delete") echo "Key deleted" ;;
+"preauthkeys expire") echo "Key expired" ;;
+"users create") echo "User created" ;;
+"users destroy") echo "User destroyed" ;;
+version) echo "headscale version 0.29.0" ;;
+*)
+	echo "fake headscale: unexpected: $*" >&2
+	exit 1
+	;;
+esac

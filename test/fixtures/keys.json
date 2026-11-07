@@ -1,0 +1,4 @@
+[
+  {"user":{"id":1,"name":"alice"},"id":1,"key":"pk-aaaaaaaaaaaa","reusable":true,"ephemeral":false,"used":false,"expiration":{"seconds":1767312000},"created_at":{"seconds":1767225600},"acl_tags":["tag:mobile"]},
+  {"user":{"id":2,"name":"bob"},"id":2,"key":"pk-bbbbbbbbbbbb","reusable":false,"ephemeral":true,"used":true,"expiration":{"seconds":1767300000},"created_at":{"seconds":1767220000},"acl_tags":[]}
+]
