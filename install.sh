@@ -9,10 +9,10 @@ dest=${1:-/usr/local/bin/hs}
 	printf 'install: %s not found\n' "$src" >&2
 	exit 1
 }
-[[ $(id -u) -eq 0 ]] || {
+if [[ ${HS_SKIP_ROOT_CHECK:-0} != 1 && $(id -u) -ne 0 ]]; then
 	printf 'install: root is required to write %s\n' "$dest" >&2
 	exit 1
-}
+fi
 
 install -m 0755 "$src" "$dest"
 printf 'installed %s\n' "$dest"

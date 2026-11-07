@@ -183,6 +183,32 @@ out=$(PATH=/usr/bin:/bin HS_HEADSCALE_BIN=/nonexistent/headscale "$hs" ls 2>&1)
 check_status "missing headscale: exits 1" 1 $?
 check_contains "missing headscale: hint" "headscale binary not found" "$out"
 
+# ---------------------------------------------------------------- install / uninstall
+
+bindir=$tmp/bin
+mkdir -p "$bindir"
+
+out=$(HS_SKIP_ROOT_CHECK=1 "$here/../install.sh" "$bindir/hs" 2>&1)
+check_status "install: succeeds" 0 $?
+[[ -x $bindir/hs ]] && ok "install: file is executable" || ng "install: file is executable"
+
+out=$(PATH=$here/fakebin:$bindir:$PATH "$bindir/hs" version 2>&1)
+check_contains "install: installed copy runs" "0.29.0" "$out"
+
+# A foreign file must not be deleted by accident.
+printf '#!/bin/sh\necho not hs\n' >"$tmp/stranger"
+out=$(HS_SKIP_ROOT_CHECK=1 "$here/../uninstall.sh" "$tmp/stranger" 2>&1)
+check_status "uninstall: refuses unknown file" 1 $?
+[[ -f $tmp/stranger ]] && ok "uninstall: unknown file kept" || ng "uninstall: unknown file kept"
+
+out=$(HS_SKIP_ROOT_CHECK=1 "$here/../uninstall.sh" "$bindir/hs" 2>&1)
+check_status "uninstall: succeeds" 0 $?
+[[ -e $bindir/hs ]] && ng "uninstall: file removed" "" "still present" || ok "uninstall: file removed"
+
+out=$(HS_SKIP_ROOT_CHECK=1 "$here/../uninstall.sh" "$bindir/hs" 2>&1)
+check_status "uninstall: idempotent" 0 $?
+check_contains "uninstall: reports nothing to do" "not installed" "$out"
+
 # ---------------------------------------------------------------- summary
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"

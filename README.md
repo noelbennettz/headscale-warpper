@@ -33,6 +33,18 @@ a specific binary:
 HS_HEADSCALE_BIN=/usr/local/bin/headscale ./hs ls
 ```
 
+## Uninstall
+
+```sh
+./uninstall.sh               # removes /usr/local/bin/hs
+./uninstall.sh /usr/bin/hs   # if you installed it somewhere else
+```
+
+It only deletes the `hs` script and refuses to touch a file that does not look
+like `hs` (use `--force` to override). Nothing else is removed: headscale, jq
+and anything you exported yourself (`HS_DEFAULT_USER` etc.) are untouched.
+Running it twice is fine — the second run reports nothing to do.
+
 ## Tests
 
 `test/smoke.sh` uses a fake `headscale` (`test/fakebin/`) plus fixed JSON
@@ -40,8 +52,12 @@ fixtures (`test/fixtures/`) to check argument construction and parsing. It does
 not need a real headscale and does not touch anything:
 
 ```sh
-./test/smoke.sh     # 46 passed, 0 failed
+./test/smoke.sh     # 55 passed, 0 failed
 ```
+
+The install/uninstall cases write into a temporary directory and need
+`HS_SKIP_ROOT_CHECK=1`, which the test sets for itself; you should never need
+that variable in normal use.
 
 ## Commands
 
