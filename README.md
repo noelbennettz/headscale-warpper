@@ -175,3 +175,7 @@ ID  KEY              REUSABLE  EPHEMERAL  USED  EXPIRY                OWNER
   unless `--force` is given.
 - Reads and writes both go through the same `headscale` binary; `hs` keeps no
   state of its own.
+
+## License
+
+MIT — see [LICENSE](LICENSE).
