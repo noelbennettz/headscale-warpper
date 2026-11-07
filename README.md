@@ -6,6 +6,10 @@ commands and stable table output that is easy to read and safe to pipe.
 Built for running **on the headscale server itself** (root, systemd): no auth
 layer, no transport, no web UI — it just calls the local `headscale` binary.
 
+Typical use case: a handful of nodes on one box, where the stock CLI's
+`--identifier` workflow is tedious and the web UI brings its own problems
+(browser compatibility, expiring keys, OIDC setup).
+
 ## Requirements
 
 - headscale (verified against the v0.29 CLI/JSON output)
@@ -18,6 +22,9 @@ layer, no transport, no web UI — it just calls the local `headscale` binary.
 
 - `column` (util-linux) is optional; without it, an internal awk fallback
   aligns the columns.
+
+Tested on Debian/Ubuntu with bash 5.x against headscale v0.29; nothing in the
+script is Linux-specific beyond the usual coreutils.
 
 ## Install
 
@@ -95,6 +102,48 @@ hs: ambiguous node name: lap matches several (1:laptop, 3:laptop2), use the ID i
 - `HS_HEADSCALE_BIN` — path to the headscale binary (default: `headscale`)
 - `HS_DEFAULT_USER` — used when `-u` is omitted and only one user exists; set
   it to pin a user
+
+## Sample output
+
+```console
+$ hs ls
+ID  NAME     USER   ADDRESS                       ONLINE   LAST SEEN             EXPIRY                TAGS
+1   laptop   alice  100.64.0.1,fd7a:115c:a1e0::1  online   2026-01-01T00:00:00Z  2027-01-15T08:00:00Z
+2   phone    alice  100.64.0.2                    offline  2025-12-31T16:53:20Z  -                     tag:mobile
+3   laptop2  bob    100.64.0.3                    online   2026-01-01T20:40:00Z  2023-11-14T22:13:20Z
+
+$ hs show laptop
+ID          1
+name        laptop
+hostname    laptop-hp
+user        alice
+address     100.64.0.1, fd7a:115c:a1e0::1
+online      yes
+last seen   2026-01-01T00:00:00Z
+expiry      2027-01-15T08:00:00Z
+tags        -
+approved    192.168.1.0/24
+available   192.168.1.0/24, 10.10.0.0/16
+serving     192.168.1.0/24
+
+$ hs route
+ID  NAME    APPROVED        AVAILABLE                    SERVING
+1   laptop  192.168.1.0/24  192.168.1.0/24,10.10.0.0/16  192.168.1.0/24
+
+$ hs key ls
+ID  KEY              REUSABLE  EPHEMERAL  USED  EXPIRY                OWNER
+1   pk-aaaaaaaaaaaa  yes       no         no    2026-01-02T00:00:00Z  tag:mobile
+2   pk-bbbbbbbbbbbb  no        yes        yes   2026-01-01T20:40:00Z  bob
+```
+
+(The rows above come from `test/fixtures`, i.e. synthetic data.)
+
+## Exit codes
+
+| Code | Meaning |
+| --- | --- |
+| 0 | Success, or the user cancelled a confirmation prompt |
+| 1 | Anything else: missing jq/headscale, unknown node, ambiguous name, headscale itself failing, refusal in a non-interactive shell |
 
 ## Mapping to the native CLI
 

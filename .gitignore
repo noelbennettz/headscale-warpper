@@ -1,0 +1,7 @@
+# editor and OS clutter
+*~
+*.swp
+.DS_Store
+
+# local scratch space used while testing
+tmp/
