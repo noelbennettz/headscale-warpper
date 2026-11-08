@@ -59,7 +59,7 @@ fixtures (`test/fixtures/`) to check argument construction and parsing. It does
 not need a real headscale and does not touch anything:
 
 ```sh
-./test/smoke.sh     # 55 passed, 0 failed
+./test/smoke.sh     # 73 passed, 0 failed
 ```
 
 The install/uninstall cases write into a temporary directory and need
@@ -74,14 +74,14 @@ that variable in normal use.
 | `hs show <node>` | Details for one node, including approved/available/serving routes |
 | `hs rm <node...> [--force]` | Delete nodes, asks first |
 | `hs rename <node> <new-name>` | Rename a node |
-| `hs tag <node> [tag...]` | Overwrite tags; no tag clears them |
+| `hs tag <node> <tag...>` | Overwrite tags; each tag must be `tag:lowercase` (see [Tags](#tags)) |
 | `hs expire <node>` | Log out (forces re-authentication) |
-| `hs expire <node> --at 2026-02-01T00:00:00Z` | Set an explicit expiry (RFC3339) |
+| `hs expire <node> --at 2026-02-01T00:00:00Z` | Set an explicit expiry (RFC3339, see [Dates, durations and numbers](#dates-durations-and-numbers)) |
 | `hs expire <node> --disable` | Disable expiry |
 | `hs route [node]` | List nodes that have routes |
 | `hs route add <node> <cidr...>` | Approve routes (**merged** with the existing ones) |
 | `hs route rm <node> [cidr...]` | Withdraw routes; no cidr withdraws all |
-| `hs key new [-u user] [-e 24h] [-r] [-E] [-t tag]` | Create a preauthkey; stdout is the key only |
+| `hs key new [-u user] [-e 24h] [-r] [-E] [-t tag]` | Create a preauthkey (`-e` defaults to `1h`); stdout is the key only |
 | `hs key ls` / `hs key rm <id...>` / `hs key expire <id...>` | List / delete / expire keys |
 | `hs user ls` / `hs user new <name>` / `hs user rm <name\|id> [--force]` | User management |
 | `hs version` / `hs help` | Version and help |
@@ -89,12 +89,112 @@ that variable in normal use.
 ### Naming nodes
 
 `<node>` accepts an ID or a name (matched against `given_name`, then
-`hostname`). Names also match on a unique prefix; when several nodes match, the
-candidates are listed and you are asked to use the ID:
+`hostname`). Names also match on a unique **prefix** — a name that only
+contains the query does not match, so `hs show top` will not hit `laptop`. When
+several nodes match, the candidates are listed and you are asked to use the ID:
 
 ```
 $ hs show lap
 hs: ambiguous node name: lap matches several (1:laptop, 3:laptop2), use the ID instead
+```
+
+### Dates, durations and numbers
+
+`hs` forwards these values to headscale instead of re-implementing them, so the
+formats and limits below are exactly what headscale v0.29 accepts. Anything else
+comes back from the server as `parsing expiry time: ...` or
+`parsing duration: ...`.
+
+#### Expiry timestamps — `hs expire --at`
+
+`--at` is a **point in time in RFC3339 form**: full date, time and a timezone
+(`Z` or `±hh:mm`). It is not a duration and not a Unix timestamp. `hs` checks
+that shape before calling headscale, so typos fail fast with an `hs:` hint
+instead of a server-side parse error.
+
+| Input | Accepted | Why |
+| --- | --- | --- |
+| `2026-02-01T00:00:00Z` | yes | UTC |
+| `2026-02-01T08:00:00+08:00` | yes | explicit offset |
+| `2026-02-01T00:00:00.500Z` | yes | fractional seconds are allowed |
+| `2026-02-01` | no | date only |
+| `2026-02-01T00:00:00` | no | missing timezone |
+| `2026-02-01 00:00:00Z` | no | space instead of `T` |
+| `1767225600` | no | epoch seconds; use the expanded date/time |
+| `24h`, `7d` | no | `--at` is a timestamp, not a duration |
+
+What the timestamp means:
+
+- no `--at` → the node expires **now** (it is logged out and has to
+  re-authenticate);
+- `--at` in the past → same as expiring now;
+- `--at` in the future → the node keeps working until that moment, then drops
+  off and has to re-authenticate;
+- `--disable` → the expiry is removed entirely (the node never expires), and the
+  `EXPIRY` column of `hs ls` shows `-`;
+- `--disable` together with `--at` → `--disable` wins, `--at` is ignored (hs
+  never sends both, which headscale would otherwise reject).
+
+Times are printed back in **UTC**, so a `+08:00` expiry comes back shifted.
+
+Note the letter clash: `-e` means *timestamp* in `hs expire` but *duration* in
+`hs key new`. Same letter, different grammar:
+
+```sh
+hs expire phone --at 2026-02-01T00:00:00Z   # a point in time
+hs key new -u alice -e 24h                 # 24 hours from now
+```
+
+#### Preauthkey lifetime — `hs key new -e`
+
+`-e` is a **duration counted from now**, parsed by headscale with Prometheus'
+duration parser. Rules:
+
+- units: `y` (365 d), `w` (7 d), `d` (24 h), `h`, `m`, `s`, `ms` — nothing else
+  (`us`, `ns`, `M` for month are rejected);
+- whole numbers only: `1.5h` is invalid, write `90m`;
+- units must run from largest to smallest: `1d12h30m` is fine, `30m1d` is not;
+- no negatives and no spaces;
+- `0` is accepted but means "expires immediately", **not** "never expires";
+- the default when `-e` is omitted is `1h` (headscale's own default);
+- the upper bound is Go's `time.Duration`, about 292 years (`2562047h`); larger
+  values fail with `duration out of range`.
+
+```sh
+hs key new -u alice            # expires in 1h
+hs key new -u alice -e 30m     # half an hour to enroll the node
+hs key new -u alice -e 7d -r   # one week, reusable
+hs key new -u alice -e 8760h   # one year
+```
+
+Durations are the only way to get a long-lived key: there is no "forever"
+preauthkey option, and `-e 0` hands you a key that is already expired.
+
+#### IDs
+
+Node, user and preauthkey IDs are unsigned integers assigned by headscale and
+count from **1**; `0` is treated as "unset" and can never be a valid ID.
+`hs key rm` and `hs key expire` take plain decimal numbers only — anything else
+fails with `key ID must be numeric: <value>`, and `0` is refused locally with
+`... must be 1 or greater: 0` rather than being sent to headscale. `hs rm`,
+`hs show`, `hs rename`, `hs tag` and `hs expire` take an ID *or* a name;
+`hs user rm` treats an all-digit argument as an ID and everything else as a
+name.
+
+### Tags
+
+Tags come from headscale's ACL vocabulary and are validated server-side: each
+one must start with `tag:` (so `tag:mobile`, not `mobile`), must be lowercase
+and must not contain spaces. `hs tag <node> <tag...>` replaces the whole list,
+so a node ends up with exactly the tags you name.
+
+A node cannot be left with zero tags in v0.29 — headscale rejects an empty tag
+list — so `hs tag <node>` with no tags fails immediately instead of sending a
+request that cannot succeed:
+
+```
+$ hs tag phone
+hs: headscale v0.29 cannot remove all tags from a node; pass at least one tag (e.g. tag:mobile)
 ```
 
 ### Environment
