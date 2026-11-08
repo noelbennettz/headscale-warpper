@@ -22,8 +22,9 @@ Nodes
   hs show <node>                  Show details for a single node
   hs rm <node...> [--force]       Delete nodes (asks for confirmation)
   hs rename <node> <new-name>     Rename a node
-  hs tag <node> [tag...]          Overwrite tags (no tag = clear them)
-  hs expire <node> [--at TIME]    Log out a node / set its expiry (RFC3339)
+  hs tag <node> <tag...>          Overwrite tags (each tag must be tag:lowercase)
+  hs expire <node> [--at TIME]    Log out a node / set its expiry; --at takes
+                                  an RFC3339 timestamp (2026-02-01T00:00:00Z)
   hs expire <node> --disable      Disable expiry (node never expires)
 
 Routes (subnet routes)
@@ -33,7 +34,8 @@ Routes (subnet routes)
 
 Pre-auth keys
   hs key new [-u user] [-e 24h] [-r] [-E] [-t tag]
-                                  Create a preauthkey; -r reusable,
+                                  Create a preauthkey (-e is a duration from
+                                  now: 30m, 24h, 7d; default 1h); -r reusable,
                                   -E ephemeral
   hs key ls                       List keys
   hs key rm <id...>               Delete keys
@@ -49,7 +51,11 @@ Other
   hs help                         Show this help
 
 <node> accepts an ID or a name (given_name, then hostname); names also match
-on a unique prefix.
+on a unique prefix. IDs are numbers starting at 1.
+
+Timestamps (--at) are RFC3339 with a timezone; durations (-e) are whole numbers
+with a unit, largest first (y w d h m s ms), e.g. 1d12h; the default is 1h.
+Careful: -e is a timestamp in "hs expire" but a duration in "hs key new".
 EOF
 }
 
@@ -128,7 +134,7 @@ resolve_node() {
 			  elif ($exact | length) > 1 then
 				"AMBIG:" + ([$exact[] | "\(.id):\(.given_name // .name)"] | join(", "))
 			  else
-				( map(select(((.given_name // "") | contains($q)) or ((.name // "") | contains($q)))) ) as $fuzzy
+				( map(select(((.given_name // "") | startswith($q)) or ((.name // "") | startswith($q)))) ) as $fuzzy
 				| if ($fuzzy | length) == 1 then $fuzzy[0].id
 				  elif ($fuzzy | length) == 0 then "NOTFOUND"
 				  else "AMBIG:" + ([$fuzzy[] | "\(.id):\(.given_name // .name)"] | join(", "))
@@ -190,6 +196,18 @@ confirm() {
 	fi
 	read -r -p "$prompt [y/N] " answer || true
 	[[ $answer == [yY]* ]]
+}
+
+# validate_rfc3339: reject the mistakes users actually make (date only, no
+# timezone, epoch seconds, a duration instead of a timestamp) locally, so the
+# hint is immediate instead of a headscale "parsing expiry time" error.
+# It is a shape check only; headscale still decides what the value means.
+validate_rfc3339() {
+	local value=$1
+	[[ -n $value ]] ||
+		die "--at needs a timestamp, e.g. 2026-02-01T00:00:00Z (see hs help)"
+	[[ $value =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{1,2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)?(Z|[+-][0-9]{2}:[0-9]{2})$ ]] ||
+		die "--at takes an RFC3339 timestamp with a timezone, e.g. 2026-02-01T00:00:00Z or 2026-02-01T08:00:00+08:00 (got: $value)"
 }
 
 # ---------------------------------------------------------------- nodes
@@ -274,20 +292,18 @@ cmd_rename() {
 }
 
 cmd_tag() {
-	(($# >= 1)) || die "usage: hs tag <node> [tag...]"
+	(($# >= 1)) || die "usage: hs tag <node> <tag...>"
 	local id
 	ensure_nodes
 	id=$(resolve_node "$1")
 	shift
+	(($#)) ||
+		die "headscale v0.29 cannot remove all tags from a node; pass at least one tag (e.g. tag:mobile)"
 	local -a args=(nodes tag -i "$id")
 	local t
 	for t in "$@"; do args+=(-t "$t"); done
 	"$HEADSCALE_BIN" "${args[@]}" >/dev/null
-	if (($#)); then
-		printf 'tags set to: %s\n' "$*"
-	else
-		printf 'tags cleared\n'
-	fi
+	printf 'tags set to: %s\n' "$*"
 }
 
 cmd_expire() {
@@ -295,7 +311,7 @@ cmd_expire() {
 	local target=$1
 	shift
 
-	local disable=0 at=""
+	local disable=0 at="" at_set=0
 	while (($#)); do
 		case $1 in
 		-d | --disable) disable=1 ;;
@@ -303,11 +319,16 @@ cmd_expire() {
 			shift
 			[[ $# -gt 0 ]] || die "--at needs a timestamp (RFC3339)"
 			at=$1
+			at_set=1
 			;;
 		*) die "unknown option: $1" ;;
 		esac
 		shift
 	done
+
+	if ((at_set)); then
+		validate_rfc3339 "$at"
+	fi
 
 	local id
 	ensure_nodes
@@ -320,9 +341,9 @@ cmd_expire() {
 	fi
 
 	local -a args=(nodes expire -i "$id")
-	[[ -n $at ]] && args+=(-e "$at")
+	((at_set)) && args+=(-e "$at")
 	"$HEADSCALE_BIN" "${args[@]}" >/dev/null
-	if [[ -n $at ]]; then
+	if ((at_set)); then
 		printf 'expiry set to %s (%s)\n' "$at" "$target"
 	else
 		printf 'logged out %s, it has to re-authenticate\n' "$target"
@@ -444,6 +465,7 @@ key_new() {
 			shift
 			[[ $# -gt 0 ]] || die "-e needs a duration (e.g. 30m, 24h)"
 			exp=$1
+			[[ -n $exp ]] || die "-e needs a duration (e.g. 30m, 24h)"
 			;;
 		-r | --reusable) reusable=1 ;;
 		-E | --ephemeral) ephemeral=1 ;;
@@ -497,6 +519,7 @@ key_action() {
 	local id
 	for id in "$@"; do
 		[[ $id =~ ^[0-9]+$ ]] || die "key ID must be numeric: $id"
+		((id > 0)) || die "key ID must be 1 or greater: $id"
 		"$HEADSCALE_BIN" preauthkeys "$action" -i "$id" >/dev/null
 		printf 'key %s: %s\n' "$id" "$label"
 	done
@@ -560,6 +583,7 @@ user_rm() {
 		fi
 		local -a args=(users destroy)
 		if [[ $t =~ ^[0-9]+$ ]]; then
+			((t > 0)) || die "user ID must be 1 or greater: $t"
 			args+=(--identifier "$t")
 		else
 			args+=(--name "$t")

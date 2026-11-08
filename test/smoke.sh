@@ -64,6 +64,11 @@ out=$("$hs" show nosuch 2>&1)
 check_status "show: unknown node exits 1" 1 $?
 check_contains "show: unknown node message" "no such node: nosuch" "$out"
 
+# Matching is by prefix: a query that only appears inside a name must not match.
+out=$("$hs" show top 2>&1)
+check_status "show: substring does not match" 1 $?
+check_contains "show: substring message" "no such node: top" "$out"
+
 reset_log
 out=$("$hs" rm phone 2>&1 </dev/null)
 check_status "rm: refuses in non-interactive shell" 1 $?
@@ -82,6 +87,13 @@ reset_log
 "$hs" tag phone tag:mobile tag:test >/dev/null
 log_grep "nodes tag -i 2 -t tag:mobile -t tag:test" && ok "tag: arguments" || ng "tag: arguments" "nodes tag -i 2 -t tag:mobile -t tag:test" "$(cat "$HS_LOG")"
 
+# v0.29 rejects an empty tag list server-side, so hs must not send one.
+reset_log
+out=$("$hs" tag phone 2>&1)
+check_status "tag: empty list refused" 1 $?
+check_contains "tag: empty list hint" "cannot remove all tags" "$out"
+log_grep "nodes tag" && ng "tag: not sent to headscale" "" "$(cat "$HS_LOG")" || ok "tag: not sent to headscale"
+
 reset_log
 "$hs" expire phone >/dev/null
 log_grep "nodes expire -i 2" && ok "expire: logout now" || ng "expire: logout now" "nodes expire -i 2" "$(cat "$HS_LOG")"
@@ -93,6 +105,24 @@ log_grep "nodes expire -i 2 -e 2026-02-01T00:00:00Z" && ok "expire: explicit tim
 reset_log
 "$hs" expire phone --disable >/dev/null
 log_grep "nodes expire -i 2 --disable" && ok "expire: disable" || ng "expire: disable" "--disable" "$(cat "$HS_LOG")"
+
+reset_log
+"$hs" expire phone --at 2026-02-01T08:00:00+08:00 >/dev/null
+log_grep "nodes expire -i 2 -e 2026-02-01T08:00:00+08:00" && ok "expire: offset timestamp accepted" ||
+	ng "expire: offset timestamp accepted" "-e 2026-02-01T08:00:00+08:00" "$(cat "$HS_LOG")"
+
+# --at must be RFC3339: reject the usual mistakes before calling headscale.
+out=$("$hs" expire phone --at 24h 2>&1)
+check_status "expire: duration rejected for --at" 1 $?
+check_contains "expire: --at format hint" "RFC3339" "$out"
+
+out=$("$hs" expire phone --at 2026-02-01 2>&1)
+check_status "expire: date only rejected" 1 $?
+check_contains "expire: timezone hint" "timezone" "$out"
+
+out=$("$hs" expire phone --at '' 2>&1)
+check_status "expire: empty --at rejected" 1 $?
+check_contains "expire: empty --at hint" "--at needs a timestamp" "$out"
 
 # ---------------------------------------------------------------- routes
 
@@ -139,6 +169,14 @@ log_grep "preauthkeys delete -i 1" && log_grep "preauthkeys delete -i 2" &&
 out=$("$hs" key rm abc 2>&1)
 check_status "key rm: rejects non-numeric ID" 1 $?
 
+out=$("$hs" key rm 0 2>&1)
+check_status "key rm: rejects ID 0" 1 $?
+check_contains "key rm: ID 0 hint" "must be 1 or greater" "$out"
+
+out=$("$hs" key new -u alice -e '' 2>&1)
+check_status "key new: empty -e rejected" 1 $?
+check_contains "key new: -e hint" "needs a duration" "$out"
+
 reset_log
 "$hs" key expire 2 >/dev/null
 log_grep "preauthkeys expire -i 2" && ok "key expire: arguments" || ng "key expire: arguments" "expire -i 2" "$(cat "$HS_LOG")"
@@ -159,6 +197,10 @@ log_grep "users destroy --name bob --force" && ok "user rm: by name" || ng "user
 reset_log
 "$hs" user rm 2 --force >/dev/null
 log_grep "users destroy --identifier 2 --force" && ok "user rm: by ID" || ng "user rm: by ID" "--identifier 2" "$(cat "$HS_LOG")"
+
+out=$("$hs" user rm 0 --force 2>&1)
+check_status "user rm: rejects ID 0" 1 $?
+check_contains "user rm: ID 0 hint" "must be 1 or greater" "$out"
 
 # ---------------------------------------------------------------- deps and errors
 
