@@ -60,6 +60,35 @@ out=$("$hs" show lap 2>&1)
 check_status "show: ambiguous name exits 1" 1 $?
 check_contains "show: ambiguous name lists candidates" "1:laptop, 3:laptop2" "$out"
 
+# headscale-style spelling: hs node <verb> must reach the real verb instead of
+# treating the verb as a user name.
+out=$("$hs" node ls)
+check_contains "node ls: header" "NAME" "$out"
+
+out=$("$hs" nodes ls)
+check_contains "nodes ls: header" "NAME" "$out"
+
+out=$("$hs" node)
+check_contains "node: bare word lists nodes" "laptop" "$out"
+
+out=$("$hs" node show laptop)
+check_contains "node show: name resolved to ID" "ID          1" "$out"
+
+reset_log
+"$hs" node rm phone --force >/dev/null
+log_grep "nodes delete -i 2 --force" && ok "node rm: deletes the node" || ng "node rm: deletes the node" "nodes delete -i 2 --force" "$(cat "$HS_LOG")"
+
+reset_log
+"$hs" node rename phone pixel >/dev/null
+log_grep "nodes rename -i 2 pixel" && ok "node rename: arguments" || ng "node rename: arguments" "nodes rename -i 2 pixel" "$(cat "$HS_LOG")"
+
+out=$("$hs" node nosuchverb 2>&1)
+check_status "node: unknown subcommand exits 1" 1 $?
+check_contains "node: unknown subcommand message" "unknown node subcommand: nosuchverb" "$out"
+check_contains "node: user-filter hint" "hs ls <user>" "$out"
+log_grep "nodes list -u nosuchverb" && ng "node: verb is not sent as a user" "" "$(cat "$HS_LOG")" ||
+	ok "node: verb is not sent as a user"
+
 out=$("$hs" show nosuch 2>&1)
 check_status "show: unknown node exits 1" 1 $?
 check_contains "show: unknown node message" "no such node: nosuch" "$out"
@@ -211,6 +240,20 @@ out=$("$hs" nosuchcmd 2>&1)
 check_status "unknown command exits 1" 1 $?
 check_contains "unknown command message" "unknown command: nosuchcmd" "$out"
 
+# A failing headscale must surface its own message, not swallow it; the
+# "rpc error: code = Unknown desc = " noise is stripped.
+cat >"$tmp/failing-headscale" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' '{"error": "listing nodes: rpc error: code = Unknown desc = user not found"}' >&2
+exit 1
+EOF
+chmod +x "$tmp/failing-headscale"
+out=$(HS_HEADSCALE_BIN="$tmp/failing-headscale" "$hs" ls rm 2>&1)
+check_status "headscale failure: exits 1" 1 $?
+check_contains "headscale failure: keeps the cause" "failed to list nodes (user: rm): user not found" "$out"
+[[ $out == *"desc = "* ]] && ng "headscale failure: noise stripped" "" "$out" || ok "headscale failure: noise stripped"
+check_contains "headscale failure: user hint" "hs user ls" "$out"
+
 # Missing jq: PATH holds only bash and the fake headscale, so hs must stop
 # with a hint instead of failing somewhere in the middle.
 mkdir -p "$tmp/nojq"
@@ -224,6 +267,13 @@ check_contains "missing jq: install hint" "jq not found" "$out"
 out=$(PATH=/usr/bin:/bin HS_HEADSCALE_BIN=/nonexistent/headscale "$hs" ls 2>&1)
 check_status "missing headscale: exits 1" 1 $?
 check_contains "missing headscale: hint" "headscale binary not found" "$out"
+
+# Help is a static text: it must not depend on jq or headscale being installed.
+# ($tmp/nojq already lost `cat`, so add it back: coreutils are not under test.)
+ln -sf "$(command -v cat)" "$tmp/nojq/cat"
+out=$(PATH="$tmp/nojq" HS_HEADSCALE_BIN=/nonexistent/headscale "$hs" help 2>&1)
+check_status "help: works without deps" 0 $?
+check_contains "help: documents the node spelling" "hs node <verb>" "$out"
 
 # ---------------------------------------------------------------- install / uninstall
 

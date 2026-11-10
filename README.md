@@ -59,7 +59,7 @@ fixtures (`test/fixtures/`) to check argument construction and parsing. It does
 not need a real headscale and does not touch anything:
 
 ```sh
-./test/smoke.sh     # 73 passed, 0 failed
+./test/smoke.sh     # 89 passed, 0 failed
 ```
 
 The install/uninstall cases write into a temporary directory and need
@@ -71,6 +71,7 @@ that variable in normal use.
 | Command | Description |
 | --- | --- |
 | `hs` / `hs ls [user]` | List nodes (ID, name, user, addresses, online, last seen, expiry, tags) |
+| `hs node <verb> ...` | The same node commands spelled headscale-style: `hs node rm gw-fmt-1` = `hs rm gw-fmt-1` |
 | `hs show <node>` | Details for one node, including approved/available/serving routes |
 | `hs rm <node...> [--force]` | Delete nodes, asks first |
 | `hs rename <node> <new-name>` | Rename a node |
@@ -96,6 +97,28 @@ several nodes match, the candidates are listed and you are asked to use the ID:
 ```
 $ hs show lap
 hs: ambiguous node name: lap matches several (1:laptop, 3:laptop2), use the ID instead
+```
+
+### `hs node <verb>` — headscale-style spelling
+
+Node commands also accept the two-word form you may be used to from the native
+CLI: `hs node ls`, `hs node show`, `hs node rm`, `hs node rename`, `hs node
+tag`, `hs node expire`, `hs node route` are exactly `hs ls`, `hs show`,
+`hs rm`, ... An unknown verb is an error rather than a user filter:
+
+```
+$ hs node frobnicate gw
+hs: unknown node subcommand: frobnicate (available: ls, show, rm, rename, tag, expire, route; to filter by user use: hs ls <user>)
+```
+
+### When headscale fails
+
+`hs` keeps headscale's own explanation and drops the gRPC noise, so a wrong
+user or a stopped server says why instead of just "failed":
+
+```
+$ hs ls rm
+hs: failed to list nodes (user: rm): user not found (hs user ls lists the users)
 ```
 
 ### Dates, durations and numbers

@@ -19,6 +19,8 @@ usage: hs <command> [args]
 
 Nodes
   hs ls [user]                    List nodes (optionally filtered by user)
+  hs node <verb> ...              Same commands spelled headscale-style, e.g.
+                                  hs node rm gw-fmt-1 (= hs rm gw-fmt-1)
   hs show <node>                  Show details for a single node
   hs rm <node...> [--force]       Delete nodes (asks for confirmation)
   hs rename <node> <new-name>     Rename a node
@@ -101,15 +103,39 @@ def ts:
 
 NODES_JSON=""
 
+# headscale reports gRPC failures as a one-line JSON object on stderr, e.g.
+#   {"error": "listing nodes: rpc error: code = Unknown desc = user not found"}
+# Keep the description only; the "rpc error: code = Unknown desc = " prefix
+# tells the user nothing. Plain-text errors fall back to their first line.
+extract_error() {
+	local raw=$1 msg=""
+	msg=$(jq -r '(.error // .message // empty)' <<<"$raw" 2>/dev/null || true)
+	[[ -n $msg ]] || msg=$(printf '%s\n' "$raw" | grep -m1 -v '^[[:space:]]*$' || true)
+	msg=${msg#*desc = }
+	printf '%s' "${msg:0:200}"
+}
+
 load_nodes() {
-	local user=${1:-}
+	local user=${1:-} err rc=0 raw msg
+	err=$(mktemp "${TMPDIR:-/tmp}/hs-err.XXXXXX") || die "cannot create a temporary file"
+
 	if [[ -n $user ]]; then
-		NODES_JSON=$("$HEADSCALE_BIN" nodes list -u "$user" -o json) ||
-			die "failed to list nodes (user: $user)"
+		NODES_JSON=$("$HEADSCALE_BIN" nodes list -u "$user" -o json 2>"$err") || rc=$?
 	else
-		NODES_JSON=$("$HEADSCALE_BIN" nodes list -o json) ||
-			die "failed to list nodes"
+		NODES_JSON=$("$HEADSCALE_BIN" nodes list -o json 2>"$err") || rc=$?
 	fi
+
+	if ((rc != 0)); then
+		raw=$(cat "$err")
+		rm -f "$err"
+		[[ -n $raw ]] || raw=$NODES_JSON
+		msg=$(extract_error "$raw")
+		if [[ -n $user ]]; then
+			die "failed to list nodes (user: $user): ${msg:-unknown error} (hs user ls lists the users)"
+		fi
+		die "failed to list nodes: ${msg:-unknown error}"
+	fi
+	rm -f "$err"
 }
 
 # The node cache has to be filled in the parent shell: helpers such as
@@ -211,6 +237,27 @@ validate_rfc3339() {
 }
 
 # ---------------------------------------------------------------- nodes
+
+# "headscale nodes ..." muscle memory: accept hs node <verb> as a two-word
+# spelling of hs <verb>. Before this existed, "node" was an alias of "ls" and
+# hs node rm gw read the *verb* as a user name ("failed to list nodes
+# (user: rm): user not found").
+cmd_node() {
+	local sub=${1:-ls}
+	(($#)) && shift
+	case $sub in
+	ls | list) cmd_ls "${1:-}" ;;
+	show | info | get) cmd_show "${1:-}" ;;
+	rm | del | delete | remove) cmd_rm "$@" ;;
+	rename | mv | name) cmd_rename "$@" ;;
+	tag | tags) cmd_tag "$@" ;;
+	expire | logout | reauth) cmd_expire "$@" ;;
+	route | routes) cmd_route "$@" ;;
+	*)
+		die "unknown node subcommand: $sub (available: ls, show, rm, rename, tag, expire, route; to filter by user use: hs ls <user>)"
+		;;
+	esac
+}
 
 cmd_ls() {
 	load_nodes "${1:-}"
@@ -600,11 +647,14 @@ main() {
 	local cmd=${1:-ls}
 	(($#)) && shift
 
+	# Help must work even where jq or headscale is missing or broken.
+	case $cmd in help | -h | --help) usage; return 0 ;; esac
+
 	require_deps
 
 	case $cmd in
-	help | -h | --help) usage ;;
-	ls | list | nodes | node) cmd_ls "${1:-}" ;;
+	ls | list) cmd_ls "${1:-}" ;;
+	node | nodes) cmd_node "$@" ;;
 	show | info) cmd_show "${1:-}" ;;
 	rm | del | delete) cmd_rm "$@" ;;
 	rename | mv) cmd_rename "$@" ;;
