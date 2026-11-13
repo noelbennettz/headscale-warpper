@@ -59,7 +59,7 @@ fixtures (`test/fixtures/`) to check argument construction and parsing. It does
 not need a real headscale and does not touch anything:
 
 ```sh
-./test/smoke.sh     # 89 passed, 0 failed
+./test/smoke.sh     # 90 passed, 0 failed
 ```
 
 The install/uninstall cases write into a temporary directory and need
@@ -155,8 +155,9 @@ What the timestamp means:
   off and has to re-authenticate;
 - `--disable` → the expiry is removed entirely (the node never expires), and the
   `EXPIRY` column of `hs ls` shows `-`;
-- `--disable` together with `--at` → `--disable` wins, `--at` is ignored (hs
-  never sends both, which headscale would otherwise reject).
+- `--disable` together with `--at` → `--disable` wins: the expiry is removed and
+  `--at` is not sent, though its shape is still checked so a typo does not go
+  unnoticed.
 
 Times are printed back in **UTC**, so a `+08:00` expiry comes back shifted.
 
@@ -302,3 +303,5 @@ ID  KEY              REUSABLE  EPHEMERAL  USED  EXPIRY                OWNER
 ## License
 
 MIT — see [LICENSE](LICENSE).
+
+Release history: [CHANGELOG.md](CHANGELOG.md).

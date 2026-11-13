@@ -40,7 +40,37 @@ check_status() {
 # Clear the call log before each mutating command so we can assert on the
 # exact arguments handed to headscale.
 reset_log() { : >"$HS_LOG"; }
-log_grep() { grep -qF -- "$1" "$HS_LOG"; }
+
+# check_calls <name> <pattern...>: every pattern must appear in the call log.
+check_calls() {
+	local name=$1 p
+	shift
+	for p in "$@"; do
+		if ! grep -qF -- "$p" "$HS_LOG"; then
+			ng "$name" "$p" "$(cat "$HS_LOG")"
+			return
+		fi
+	done
+	ok "$name"
+}
+
+# check_no_calls <name> <pattern...>: none of the patterns may be logged.
+check_no_calls() {
+	local name=$1 p
+	shift
+	for p in "$@"; do
+		if grep -qF -- "$p" "$HS_LOG"; then
+			ng "$name" "no \"$p\"" "$(cat "$HS_LOG")"
+			return
+		fi
+	done
+	ok "$name"
+}
+
+check_not_contains() {
+	local name=$1 want=$2 got=$3
+	if [[ $got == *"$want"* ]]; then ng "$name" "without $want" "$got"; else ok "$name"; fi
+}
 
 # ---------------------------------------------------------------- nodes
 
@@ -48,6 +78,11 @@ out=$("$hs" ls)
 check_contains "ls: header" "NAME" "$out"
 check_contains "ls: node appears in list" "laptop" "$out"
 check_contains "ls: online state rendered" "offline" "$out"
+if grep -q '[[:space:]]$' <<<"$out"; then
+	ng "ls: no trailing whitespace" "" "$out"
+else
+	ok "ls: no trailing whitespace"
+fi
 
 out=$("$hs" show laptop)
 check_contains "show: name resolved to ID" "ID          1" "$out"
@@ -76,18 +111,17 @@ check_contains "node show: name resolved to ID" "ID          1" "$out"
 
 reset_log
 "$hs" node rm phone --force >/dev/null
-log_grep "nodes delete -i 2 --force" && ok "node rm: deletes the node" || ng "node rm: deletes the node" "nodes delete -i 2 --force" "$(cat "$HS_LOG")"
+check_calls "node rm: deletes the node" "nodes delete -i 2 --force"
 
 reset_log
 "$hs" node rename phone pixel >/dev/null
-log_grep "nodes rename -i 2 pixel" && ok "node rename: arguments" || ng "node rename: arguments" "nodes rename -i 2 pixel" "$(cat "$HS_LOG")"
+check_calls "node rename: arguments" "nodes rename -i 2 pixel"
 
 out=$("$hs" node nosuchverb 2>&1)
 check_status "node: unknown subcommand exits 1" 1 $?
 check_contains "node: unknown subcommand message" "unknown node subcommand: nosuchverb" "$out"
 check_contains "node: user-filter hint" "hs ls <user>" "$out"
-log_grep "nodes list -u nosuchverb" && ng "node: verb is not sent as a user" "" "$(cat "$HS_LOG")" ||
-	ok "node: verb is not sent as a user"
+check_no_calls "node: verb is not sent as a user" "nodes list -u nosuchverb"
 
 out=$("$hs" show nosuch 2>&1)
 check_status "show: unknown node exits 1" 1 $?
@@ -106,39 +140,38 @@ check_contains "rm: non-interactive hint" "--force" "$out"
 reset_log
 out=$("$hs" rm phone --force)
 check_contains "rm: confirmation message" "deleted phone (ID 2)" "$out"
-log_grep "nodes delete -i 2 --force" && ok "rm: headscale arguments" || ng "rm: headscale arguments" "nodes delete -i 2 --force" "$(cat "$HS_LOG")"
+check_calls "rm: headscale arguments" "nodes delete -i 2 --force"
 
 reset_log
 "$hs" rename phone pixel >/dev/null
-log_grep "nodes rename -i 2 pixel" && ok "rename: arguments" || ng "rename: arguments" "nodes rename -i 2 pixel" "$(cat "$HS_LOG")"
+check_calls "rename: arguments" "nodes rename -i 2 pixel"
 
 reset_log
 "$hs" tag phone tag:mobile tag:test >/dev/null
-log_grep "nodes tag -i 2 -t tag:mobile -t tag:test" && ok "tag: arguments" || ng "tag: arguments" "nodes tag -i 2 -t tag:mobile -t tag:test" "$(cat "$HS_LOG")"
+check_calls "tag: arguments" "nodes tag -i 2 -t tag:mobile -t tag:test"
 
 # v0.29 rejects an empty tag list server-side, so hs must not send one.
 reset_log
 out=$("$hs" tag phone 2>&1)
 check_status "tag: empty list refused" 1 $?
 check_contains "tag: empty list hint" "cannot remove all tags" "$out"
-log_grep "nodes tag" && ng "tag: not sent to headscale" "" "$(cat "$HS_LOG")" || ok "tag: not sent to headscale"
+check_no_calls "tag: not sent to headscale" "nodes tag"
 
 reset_log
 "$hs" expire phone >/dev/null
-log_grep "nodes expire -i 2" && ok "expire: logout now" || ng "expire: logout now" "nodes expire -i 2" "$(cat "$HS_LOG")"
+check_calls "expire: logout now" "nodes expire -i 2"
 
 reset_log
 "$hs" expire phone --at 2026-02-01T00:00:00Z >/dev/null
-log_grep "nodes expire -i 2 -e 2026-02-01T00:00:00Z" && ok "expire: explicit timestamp" || ng "expire: explicit timestamp" "-e 2026-02-01T00:00:00Z" "$(cat "$HS_LOG")"
+check_calls "expire: explicit timestamp" "nodes expire -i 2 -e 2026-02-01T00:00:00Z"
 
 reset_log
 "$hs" expire phone --disable >/dev/null
-log_grep "nodes expire -i 2 --disable" && ok "expire: disable" || ng "expire: disable" "--disable" "$(cat "$HS_LOG")"
+check_calls "expire: disable" "nodes expire -i 2 --disable"
 
 reset_log
 "$hs" expire phone --at 2026-02-01T08:00:00+08:00 >/dev/null
-log_grep "nodes expire -i 2 -e 2026-02-01T08:00:00+08:00" && ok "expire: offset timestamp accepted" ||
-	ng "expire: offset timestamp accepted" "-e 2026-02-01T08:00:00+08:00" "$(cat "$HS_LOG")"
+check_calls "expire: offset timestamp accepted" "nodes expire -i 2 -e 2026-02-01T08:00:00+08:00"
 
 # --at must be RFC3339: reject the usual mistakes before calling headscale.
 out=$("$hs" expire phone --at 24h 2>&1)
@@ -157,33 +190,33 @@ check_contains "expire: empty --at hint" "--at needs a timestamp" "$out"
 
 out=$("$hs" route)
 check_contains "route: lists nodes that have routes" "192.168.1.0/24" "$out"
-[[ $out == *"laptop2"* ]] && ng "route: nodes without routes are hidden" "no laptop2" "$out" || ok "route: nodes without routes are hidden"
+check_not_contains "route: nodes without routes are hidden" "laptop2" "$out"
 
 reset_log
 out=$("$hs" route add laptop 10.10.0.0/16 172.16.0.0/12)
 check_contains "route add: reports merged list" "10.10.0.0/16,172.16.0.0/12,192.168.1.0/24" "$out"
-log_grep "nodes approve-routes -i 1 -r 10.10.0.0/16,172.16.0.0/12,192.168.1.0/24" &&
-	ok "route add: merges with existing approved routes" || ng "route add: merge" "merged list" "$(cat "$HS_LOG")"
+check_calls "route add: merges with existing approved routes" \
+	"nodes approve-routes -i 1 -r 10.10.0.0/16,172.16.0.0/12,192.168.1.0/24"
 
 reset_log
 "$hs" route rm laptop >/dev/null
-log_grep "nodes approve-routes -i 1 -r " && ok "route rm: no cidr withdraws everything" || ng "route rm: withdraw all" "-r (empty)" "$(cat "$HS_LOG")"
+check_calls "route rm: no cidr withdraws everything" "nodes approve-routes -i 1 -r "
 
 reset_log
 "$hs" route rm laptop 192.168.1.0/24 >/dev/null
-log_grep "nodes approve-routes -i 1 -r " && ok "route rm: last route leaves an empty list" || ng "route rm: last route" "-r (empty)" "$(cat "$HS_LOG")"
+check_calls "route rm: last route leaves an empty list" "nodes approve-routes -i 1 -r "
 
 # ---------------------------------------------------------------- pre-auth keys
 
 reset_log
 out=$("$hs" key new -u alice -e 24h -r -E -t tag:vpn)
 check_contains "key new: prints the key only" "preauthkey-abc123" "$out"
-log_grep "preauthkeys create -u 1 -e 24h --reusable --ephemeral --tags tag:vpn" &&
-	ok "key new: user name resolved to ID" || ng "key new: arguments" "user 1" "$(cat "$HS_LOG")"
+check_calls "key new: user name resolved to ID" \
+	"preauthkeys create -u 1 -e 24h --reusable --ephemeral --tags tag:vpn"
 
 reset_log
 out=$(HS_DEFAULT_USER=bob "$hs" key new -e 30m)
-log_grep "preauthkeys create -u 2 -e 30m" && ok "key new: HS_DEFAULT_USER honored" || ng "key new: HS_DEFAULT_USER" "-u 2" "$(cat "$HS_LOG")"
+check_calls "key new: HS_DEFAULT_USER honored" "preauthkeys create -u 2 -e 30m"
 
 out=$("$hs" key ls)
 check_contains "key ls: lists keys" "pk-aaaaaaaaaaaa" "$out"
@@ -192,8 +225,7 @@ check_contains "key ls: tags take precedence over owner" "tag:mobile" "$out"
 reset_log
 out=$("$hs" key rm 1 2)
 check_contains "key rm: multiple IDs" "key 2" "$out"
-log_grep "preauthkeys delete -i 1" && log_grep "preauthkeys delete -i 2" &&
-	ok "key rm: arguments" || ng "key rm: arguments" "delete -i 1 and -i 2" "$(cat "$HS_LOG")"
+check_calls "key rm: arguments" "preauthkeys delete -i 1" "preauthkeys delete -i 2"
 
 out=$("$hs" key rm abc 2>&1)
 check_status "key rm: rejects non-numeric ID" 1 $?
@@ -208,7 +240,7 @@ check_contains "key new: -e hint" "needs a duration" "$out"
 
 reset_log
 "$hs" key expire 2 >/dev/null
-log_grep "preauthkeys expire -i 2" && ok "key expire: arguments" || ng "key expire: arguments" "expire -i 2" "$(cat "$HS_LOG")"
+check_calls "key expire: arguments" "preauthkeys expire -i 2"
 
 # ---------------------------------------------------------------- users
 
@@ -217,15 +249,15 @@ check_contains "user ls: lists users" "alice@example.com" "$out"
 
 reset_log
 "$hs" user new carol >/dev/null
-log_grep "users create carol" && ok "user new: arguments" || ng "user new: arguments" "users create carol" "$(cat "$HS_LOG")"
+check_calls "user new: arguments" "users create carol"
 
 reset_log
 "$hs" user rm bob --force >/dev/null
-log_grep "users destroy --name bob --force" && ok "user rm: by name" || ng "user rm: by name" "--name bob" "$(cat "$HS_LOG")"
+check_calls "user rm: by name" "users destroy --name bob --force"
 
 reset_log
 "$hs" user rm 2 --force >/dev/null
-log_grep "users destroy --identifier 2 --force" && ok "user rm: by ID" || ng "user rm: by ID" "--identifier 2" "$(cat "$HS_LOG")"
+check_calls "user rm: by ID" "users destroy --identifier 2 --force"
 
 out=$("$hs" user rm 0 --force 2>&1)
 check_status "user rm: rejects ID 0" 1 $?
@@ -250,8 +282,9 @@ EOF
 chmod +x "$tmp/failing-headscale"
 out=$(HS_HEADSCALE_BIN="$tmp/failing-headscale" "$hs" ls rm 2>&1)
 check_status "headscale failure: exits 1" 1 $?
-check_contains "headscale failure: keeps the cause" "failed to list nodes (user: rm): user not found" "$out"
-[[ $out == *"desc = "* ]] && ng "headscale failure: noise stripped" "" "$out" || ok "headscale failure: noise stripped"
+check_contains "headscale failure: keeps the cause" \
+	"failed to list nodes (user: rm): user not found" "$out"
+check_not_contains "headscale failure: noise stripped" "desc = " "$out"
 check_contains "headscale failure: user hint" "hs user ls" "$out"
 
 # Missing jq: PATH holds only bash and the fake headscale, so hs must stop
@@ -262,7 +295,7 @@ ln -sf "$here/fakebin/headscale" "$tmp/nojq/headscale"
 out=$(PATH="$tmp/nojq" "$hs" ls 2>&1)
 check_status "missing jq: exits 1" 1 $?
 check_contains "missing jq: install hint" "jq not found" "$out"
-[[ $out == *"preauthkey"* ]] && ng "missing jq: no other output" "" "$out" || ok "missing jq: only the hint"
+check_not_contains "missing jq: no other output" "preauthkey" "$out"
 
 out=$(PATH=/usr/bin:/bin HS_HEADSCALE_BIN=/nonexistent/headscale "$hs" ls 2>&1)
 check_status "missing headscale: exits 1" 1 $?
@@ -282,7 +315,11 @@ mkdir -p "$bindir"
 
 out=$(HS_SKIP_ROOT_CHECK=1 "$here/../install.sh" "$bindir/hs" 2>&1)
 check_status "install: succeeds" 0 $?
-[[ -x $bindir/hs ]] && ok "install: file is executable" || ng "install: file is executable"
+if [[ -x $bindir/hs ]]; then
+	ok "install: file is executable"
+else
+	ng "install: file is executable"
+fi
 
 out=$(PATH=$here/fakebin:$bindir:$PATH "$bindir/hs" version 2>&1)
 check_contains "install: installed copy runs" "0.29.0" "$out"
@@ -291,11 +328,19 @@ check_contains "install: installed copy runs" "0.29.0" "$out"
 printf '#!/bin/sh\necho not hs\n' >"$tmp/stranger"
 out=$(HS_SKIP_ROOT_CHECK=1 "$here/../uninstall.sh" "$tmp/stranger" 2>&1)
 check_status "uninstall: refuses unknown file" 1 $?
-[[ -f $tmp/stranger ]] && ok "uninstall: unknown file kept" || ng "uninstall: unknown file kept"
+if [[ -f $tmp/stranger ]]; then
+	ok "uninstall: unknown file kept"
+else
+	ng "uninstall: unknown file kept"
+fi
 
 out=$(HS_SKIP_ROOT_CHECK=1 "$here/../uninstall.sh" "$bindir/hs" 2>&1)
 check_status "uninstall: succeeds" 0 $?
-[[ -e $bindir/hs ]] && ng "uninstall: file removed" "" "still present" || ok "uninstall: file removed"
+if [[ -e $bindir/hs ]]; then
+	ng "uninstall: file removed" "" "still present"
+else
+	ok "uninstall: file removed"
+fi
 
 out=$(HS_SKIP_ROOT_CHECK=1 "$here/../uninstall.sh" "$bindir/hs" 2>&1)
 check_status "uninstall: idempotent" 0 $?

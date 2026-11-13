@@ -65,7 +65,8 @@ EOF
 
 require_deps() {
 	command -v jq >/dev/null 2>&1 ||
-		die "jq not found. Install it first (Debian/Ubuntu: apt-get install -y jq, RHEL family: dnf install -y jq)"
+		die "jq not found. Install it first (Debian/Ubuntu: apt-get install -y jq," \
+			"RHEL family: dnf install -y jq)"
 	command -v "$HEADSCALE_BIN" >/dev/null 2>&1 ||
 		die "headscale binary not found ($HEADSCALE_BIN). Check the installation or set HS_HEADSCALE_BIN"
 }
@@ -73,10 +74,11 @@ require_deps() {
 # ---------------------------------------------------------------- helpers
 
 # render_table: turn TSV on stdin into an aligned table; falls back to awk
-# when column(1) is unavailable.
+# when column(1) is unavailable. Trailing padding is stripped either way so
+# the output stays clean when piped.
 render_table() {
 	if command -v column >/dev/null 2>&1; then
-		column -t -s $'\t'
+		column -t -s $'\t' | sed -e 's/[[:space:]]*$//'
 	else
 		awk -F'\t' '
 			{ n = (NF > n ? NF : n)
@@ -92,11 +94,16 @@ render_table() {
 	fi
 }
 
-# Shared jq prelude: render a protobuf timestamp ({seconds,nanos}) as UTC.
+# Shared jq prelude: render a protobuf timestamp ({seconds,nanos}) as UTC and
+# a list as "a, b" ("-" when it is missing or empty).
+# shellcheck disable=SC2016  # the jq program is single-quoted on purpose
 JQ_LIB='
 def ts:
   (. // 0) as $s
   | if $s == 0 or $s == null then "-" else ($s | todate) end;
+
+def lst:
+  ((. // []) | join(", ")) | if . == "" then "-" else . end;
 '
 
 # ---------------------------------------------------------------- data access
@@ -160,7 +167,8 @@ resolve_node() {
 			  elif ($exact | length) > 1 then
 				"AMBIG:" + ([$exact[] | "\(.id):\(.given_name // .name)"] | join(", "))
 			  else
-				( map(select(((.given_name // "") | startswith($q)) or ((.name // "") | startswith($q)))) ) as $fuzzy
+				( map(select(((.given_name // "") | startswith($q))
+					or ((.name // "") | startswith($q)))) ) as $fuzzy
 				| if ($fuzzy | length) == 1 then $fuzzy[0].id
 				  elif ($fuzzy | length) == 0 then "NOTFOUND"
 				  else "AMBIG:" + ([$fuzzy[] | "\(.id):\(.given_name // .name)"] | join(", "))
@@ -178,7 +186,16 @@ resolve_node() {
 
 node_display_name() {
 	local id=$1
-	jq -r --argjson id "$id" '.[] | select(.id == $id) | (.given_name // .name // "-")' <<<"$NODES_JSON"
+	jq -r --argjson id "$id" \
+		'.[] | select(.id == $id) | (.given_name // .name // "-")' <<<"$NODES_JSON"
+}
+
+# Print a node's approved routes as a comma-separated list ("" when none).
+# approve-routes is a replace operation, so callers merge against this list.
+approved_routes_of() {
+	local id=$1
+	jq -r --argjson id "$id" \
+		'.[] | select(.id == $id) | (.approved_routes // []) | join(",")' <<<"$NODES_JSON"
 }
 
 resolve_user() {
@@ -230,10 +247,12 @@ confirm() {
 # It is a shape check only; headscale still decides what the value means.
 validate_rfc3339() {
 	local value=$1
+	local pattern='^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{1,2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)?(Z|[+-][0-9]{2}:[0-9]{2})$'
 	[[ -n $value ]] ||
 		die "--at needs a timestamp, e.g. 2026-02-01T00:00:00Z (see hs help)"
-	[[ $value =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{1,2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)?(Z|[+-][0-9]{2}:[0-9]{2})$ ]] ||
-		die "--at takes an RFC3339 timestamp with a timezone, e.g. 2026-02-01T00:00:00Z or 2026-02-01T08:00:00+08:00 (got: $value)"
+	[[ $value =~ $pattern ]] || die \
+		"--at takes an RFC3339 timestamp with a timezone, e.g. 2026-02-01T00:00:00Z" \
+		"or 2026-02-01T08:00:00+08:00 (got: $value)"
 }
 
 # ---------------------------------------------------------------- nodes
@@ -254,7 +273,8 @@ cmd_node() {
 	expire | logout | reauth) cmd_expire "$@" ;;
 	route | routes) cmd_route "$@" ;;
 	*)
-		die "unknown node subcommand: $sub (available: ls, show, rm, rename, tag, expire, route; to filter by user use: hs ls <user>)"
+		die "unknown node subcommand: $sub (available: ls, show, rm, rename, tag, expire, route;" \
+			"to filter by user use: hs ls <user>)"
 		;;
 	esac
 }
@@ -288,14 +308,14 @@ cmd_show() {
 		  "name        \($n.given_name // $name)",
 		  "hostname    \($n.name // "-")",
 		  "user        \($n.user.name // "-")",
-		  "address     \(((($n.ip_addresses // []) | join(", "))) | if . == "" then "-" else . end)",
+		  "address     \($n.ip_addresses | lst)",
 		  "online      \(if $n.online then "yes" else "no" end)",
 		  "last seen   \($n.last_seen.seconds | ts)",
 		  "expiry      \($n.expiry.seconds | ts)",
-		  "tags        \(((($n.tags // []) | join(", "))) | if . == "" then "-" else . end)",
-		  "approved    \(((($n.approved_routes // []) | join(", "))) | if . == "" then "-" else . end)",
-		  "available   \(((($n.available_routes // []) | join(", "))) | if . == "" then "-" else . end)",
-		  "serving     \(((($n.subnet_routes // []) | join(", "))) | if . == "" then "-" else . end)"' <<<"$NODES_JSON"
+		  "tags        \($n.tags | lst)",
+		  "approved    \($n.approved_routes | lst)",
+		  "available   \($n.available_routes | lst)",
+		  "serving     \($n.subnet_routes | lst)"' <<<"$NODES_JSON"
 }
 
 cmd_rm() {
@@ -446,7 +466,7 @@ route_add() {
 	shift
 
 	local current merged
-	current=$(jq -r --argjson id "$id" '.[] | select(.id == $id) | (.approved_routes // []) | join(",")' <<<"$NODES_JSON")
+	current=$(approved_routes_of "$id")
 	merged=$(jq -rn \
 		--arg cur "$current" \
 		--arg add "$(printf '%s\n' "$@")" '
@@ -472,7 +492,7 @@ route_rm() {
 	fi
 
 	local current remaining
-	current=$(jq -r --argjson id "$id" '.[] | select(.id == $id) | (.approved_routes // []) | join(",")' <<<"$NODES_JSON")
+	current=$(approved_routes_of "$id")
 	remaining=$(jq -rn \
 		--arg cur "$current" \
 		--arg del "$(printf '%s\n' "$@")" '
@@ -488,7 +508,7 @@ route_rm() {
 
 cmd_key() {
 	local sub=${1:-ls}
-	shift || true
+	(($#)) && shift
 	case $sub in
 	new | create | add) key_new "$@" ;;
 	ls | list) key_ls ;;
@@ -576,7 +596,7 @@ key_action() {
 
 cmd_user() {
 	local sub=${1:-ls}
-	shift || true
+	(($#)) && shift
 	case $sub in
 	ls | list) user_ls ;;
 	new | create | add) user_new "$@" ;;
